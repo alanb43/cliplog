@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cliplog — free clipboard history for Mac &amp; Windows</title>
+  <meta name="description" content="Cliplog remembers the last 100 things you copied. Press a shortcut, click a clip, paste. Free and open source for macOS and Windows." />
+  <link rel="icon" href="icon.png" />
+  <style>
+    :root {
+      --bg: #fbfbfd;
+      --bg-card: #ffffff;
+      --fg: #17171c;
+      --muted: #62626e;
+      --border: #e4e4ec;
+      --accent: #5b4cf5;
+      --accent-fg: #ffffff;
+      --accent-soft: #eeecff;
+      --code: #f1f1f5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #111115;
+        --bg-card: #1b1b21;
+        --fg: #ededf2;
+        --muted: #9a9aa8;
+        --border: #2d2d36;
+        --accent: #8b80ff;
+        --accent-fg: #111115;
+        --accent-soft: #29264d;
+        --code: #24242c;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #111115; --bg-card: #1b1b21; --fg: #ededf2; --muted: #9a9aa8;
+      --border: #2d2d36; --accent: #8b80ff; --accent-fg: #111115; --accent-soft: #29264d; --code: #24242c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 19px; color: var(--fg); text-decoration: none; }
+    .brand img { width: 32px; height: 32px; }
+    nav a.gh { color: var(--muted); text-decoration: none; font-size: 15px; }
+    nav a.gh:hover { color: var(--fg); }
+
+    .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; padding: 48px 0 72px; }
+    h1 { font-size: clamp(34px, 6vw, 52px); line-height: 1.1; margin: 0 0 18px; letter-spacing: -0.02em; }
+    .sub { color: var(--muted); font-size: 19px; margin: 0 0 28px; max-width: 34ch; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+    .btn {
+      display: inline-flex; flex-direction: column; padding: 12px 20px; border-radius: 12px;
+      text-decoration: none; border: 1px solid var(--border); background: var(--bg-card); color: var(--fg);
+      min-width: 190px;
+    }
+    .btn strong { font-size: 16px; }
+    .btn small { color: var(--muted); font-size: 13px; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+    .btn.primary small { color: inherit; opacity: 0.8; }
+    .meta { margin-top: 14px; font-size: 14px; color: var(--muted); }
+
+    /* mock overlay */
+    .mock {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      box-shadow: 0 24px 60px -20px rgba(40, 30, 120, 0.35); overflow: hidden; font-size: 14px;
+    }
+    .mock .search { margin: 10px; padding: 8px 10px; border-radius: 8px; background: var(--code); color: var(--muted); }
+    .mock ul { list-style: none; margin: 0; padding: 0 6px 6px; }
+    .mock li { display: flex; gap: 10px; padding: 7px 8px; border-radius: 7px; white-space: nowrap; overflow: hidden; }
+    .mock li span:nth-child(2) { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .mock li .k, .mock li .t { color: var(--muted); font-size: 12px; flex: none; }
+    .mock li.sel { background: var(--accent-soft); }
+    .mock .foot { border-top: 1px solid var(--border); padding: 8px 12px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; }
+    .mock .more { border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; }
+
+    section { padding: 56px 0; border-top: 1px solid var(--border); }
+    h2 { font-size: 28px; margin: 0 0 24px; letter-spacing: -0.01em; }
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+    .card h3 { margin: 0 0 6px; font-size: 18px; }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    .num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 14px; margin-bottom: 10px; }
+    kbd { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+    code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 5px; padding: 2px 6px; word-break: break-all; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .two ol { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+    footer { padding: 32px 0 48px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+
+    @media (max-width: 760px) {
+      .hero, .steps, .two { grid-template-columns: 1fr; }
+      .hero { padding-top: 24px; gap: 36px; }
+      .btn { flex: 1 1 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="./"><img src="icon.png" alt="" />Cliplog</a>
+      <a class="gh" id="gh-link" href="https://github.com/alanb43/cliplog">Source on GitHub →</a>
+    </nav>
+
+    <div class="hero">
+      <div>
+        <h1>Never lose something you copied.</h1>
+        <p class="sub">Cliplog keeps your last 100 copies. Press a shortcut, click a clip, paste. Free, open source and only a few MB.</p>
+        <div class="buttons">
+          <a class="btn primary" id="dl-mac" href="https://github.com/alanb43/cliplog/releases/latest">
+            <strong>Download for Mac</strong><small>macOS 10.15+ · Apple silicon &amp; Intel</small>
+          </a>
+          <a class="btn" id="dl-win" href="https://github.com/alanb43/cliplog/releases/latest">
+            <strong>Download for Windows</strong><small>Windows 10 &amp; 11 · 64-bit</small>
+          </a>
+        </div>
+        <p class="meta" id="version">Free forever · MIT licensed</p>
+      </div>
+
+      <div class="mock" aria-hidden="true">
+        <div class="search">Search clipboard history…</div>
+        <ul>
+          <li><span class="k">⌘1</span><span>https://maps.app.goo.gl/q8Kx2</span><span class="t">now</span></li>
+          <li class="sel"><span class="k">⌘2</span><span>Order #4471-AB shipped via UPS</span><span class="t">2m</span></li>
+          <li><span class="k">⌘3</span><span>Thanks so much — talk Tuesday!</span><span class="t">9m</span></li>
+          <li><span class="k">⌘4</span><span>git checkout -b fix/login-redirect</span><span class="t">14m</span></li>
+          <li><span class="k">⌘5</span><span>221B Baker Street, London</span><span class="t">1h</span></li>
+          <li><span class="k">⌘6</span><span>Quarterly numbers: 18.2%, 21.5%, 24.9%</span><span class="t">2h</span></li>
+        </ul>
+        <div class="foot"><span class="more">Show more (100)</span><span>↑↓ · ↵ copy · esc</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap">
+      <h2>How it works</h2>
+      <div class="steps">
+        <div class="card"><div class="num">1</div><h3>Install &amp; forget</h3><p>Cliplog sits in your menu bar or system tray and quietly remembers everything you copy.</p></div>
+        <div class="card"><div class="num">2</div><h3>Press your shortcut</h3><p>The default is <kbd>⌘</kbd><kbd>⇧</kbd><kbd>V</kbd> on Mac and <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd> on Windows. You can change it in Settings.</p></div>
+        <div class="card"><div class="num">3</div><h3>Click to copy</h3><p>Your 25 latest clips appear. Click one (or press <kbd>↵</kbd>) and it’s back on your clipboard, ready to paste. You can also search, or press “Show more”.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Opening it the first time</h2>
+      <p style="color:var(--muted);margin-top:-12px">Cliplog is a free hobby project, so it isn’t signed with a paid Apple or Microsoft certificate yet. Your computer will ask you to confirm once.</p>
+      <div class="two">
+        <div class="card">
+          <h3>Mac</h3>
+          <ol>
+            <li>Open the downloaded <code>.dmg</code> and drag Cliplog into Applications.</li>
+            <li>Open Cliplog. If macOS says it can’t verify the app, go to <strong>System Settings → Privacy &amp; Security</strong>, scroll down, and click <strong>Open Anyway</strong>.</li>
+            <li>If it says the app is “damaged”, run this once in Terminal:<br /><code>xattr -dr com.apple.quarantine /Applications/Cliplog.app</code></li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>Windows</h3>
+          <ol>
+            <li>Run the downloaded <code>-setup.exe</code>.</li>
+            <li>If you see “Windows protected your PC”, click <strong>More info → Run anyway</strong>.</li>
+            <li>Cliplog starts in the system tray. If the icon isn’t visible, click the <strong>^</strong> arrow next to the clock.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Private by design</h2>
+      <p style="color:var(--muted);max-width:60ch">Your clipboard history stays on your computer, in a small file in your user folder. Cliplog has no accounts, analytics or network access. The <a id="src-link" href="https://github.com/alanb43/cliplog">source code</a> is open, so anyone can check.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">Cliplog is free and open source under the MIT License. © 2026 Alan Bergsneider.</div>
+  </footer>
+
+  <script>
+    // Point the download buttons straight at the installers in the latest GitHub release.
+    const REPO = "alanb43/cliplog";
+    const isWin = /Windows/i.test(navigator.userAgent);
+    if (isWin) {
+      const mac = document.getElementById("dl-mac"), win = document.getElementById("dl-win");
+      mac.classList.remove("primary"); win.classList.add("primary");
+      win.parentNode.insertBefore(win, mac);
+    }
+    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((release) => {
+        const find = (re) => release.assets.find((a) => re.test(a.name));
+        const dmg = find(/\.dmg$/i);
+        const exe = find(/-setup\.exe$/i) || find(/\.msi$/i);
+        if (dmg) document.getElementById("dl-mac").href = dmg.browser_download_url;
+        if (exe) document.getElementById("dl-win").href = exe.browser_download_url;
+        document.getElementById("version").textContent = `Version ${release.tag_name.replace(/^v/, "")} · Free forever · MIT licensed`;
+      })
+      .catch(() => {}); // Buttons already fall back to the releases page.
+  </script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Cliplog Settings</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="settings">
+  <h1>Cliplog</h1>
+  <p class="lead">Cliplog runs quietly in your menu bar / system tray and remembers the last 100 things you copy.
+    Press your shortcut anywhere to bring them back.</p>
+
+  <form id="form">
+    <label class="field">
+      <span>Keyboard shortcut</span>
+      <button type="button" id="shortcut" class="shortcut"></button>
+      <small id="shortcut-hint">Click, then press the keys you want to use.</small>
+    </label>
+
+    <label class="field">
+      <span>Clips shown when Cliplog opens</span>
+      <input id="quick" type="number" min="1" max="100" required />
+    </label>
+
+    <label class="field">
+      <span>Clips shown after “Show more”</span>
+      <input id="expanded" type="number" min="1" max="100" required />
+    </label>
+
+    <label class="check">
+      <input id="login" type="checkbox" />
+      <span>Start Cliplog when I log in</span>
+    </label>
+
+    <p id="status" role="status"></p>
+
+    <div class="row">
+      <button type="button" id="clear" class="danger">Clear history</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+  <script src="common.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>

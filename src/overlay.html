@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Cliplog</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="overlay">
+  <header>
+    <input id="search" type="text" placeholder="Search clipboard history…" autocomplete="off" spellcheck="false" />
+  </header>
+  <ul id="list" role="listbox"></ul>
+  <p id="empty" hidden>Nothing here yet. Copy something and it will show up here.</p>
+  <footer>
+    <button id="more" type="button"></button>
+    <span class="hint">↑↓ select · ↵ copy · esc close</span>
+  </footer>
+  <script src="common.js"></script>
+  <script src="overlay.js"></script>
+</body>
+</html>
