@@ -5,6 +5,7 @@
 //! history.json           the list of clips, newest first
 //! data/<id>.clip         raw clipboard data for clips over INLINE_LIMIT bytes
 //! images/<id>.thumb.png  preview thumbnail for image clips
+//! files/<id>/            saved copies of small copied files (see files.rs)
 //! ```
 //!
 //! Small clips keep their raw data inside history.json; bigger ones (screenshots,
@@ -17,6 +18,7 @@
 //! deleted on every save.
 
 use crate::clipboard::Snapshot;
+use crate::files::SavedFile;
 use crate::images;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -73,6 +75,9 @@ pub struct Clip {
     /// Raw data lives in `data/<id>.clip`.
     #[serde(default)]
     pub on_disk: bool,
+    /// Cliplog's own copies of the files in a file clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_files: Vec<SavedFile>,
 }
 
 impl Clip {
@@ -87,6 +92,7 @@ impl Clip {
             hash: 0,
             data: None,
             on_disk: false,
+            saved_files: Vec::new(),
         }
     }
 
@@ -147,6 +153,10 @@ impl History {
         self.dir.join("images")
     }
 
+    pub fn files_dir(&self) -> PathBuf {
+        self.dir.join("files")
+    }
+
     pub fn blob_path(&self, id: u64) -> PathBuf {
         self.data_dir().join(format!("{id}.clip"))
     }
@@ -162,6 +172,7 @@ impl History {
         let keep = |id: u64| self.clips.iter().any(|c| c.id == id);
         images::prune(&self.images_dir(), keep);
         images::prune(&self.data_dir(), keep);
+        images::prune(&self.files_dir(), keep);
     }
 
     /// Applies the user's limits and prunes right away if they shrank.

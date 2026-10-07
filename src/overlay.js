@@ -86,6 +86,10 @@ function render() {
         const tag = document.createElement("span");
         tag.className = "tag";
         tag.textContent = { files: clip.text.includes("\n") ? "Files" : "File", image: "Image", other: "App data" }[clip.kind];
+        if (clip.savedFiles?.length) {
+          tag.textContent += " · saved";
+          tag.title = "Cliplog saved a copy, so this pastes even if the original is moved or deleted.";
+        }
         text.append(tag, label(clip));
       }
 

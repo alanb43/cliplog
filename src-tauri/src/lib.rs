@@ -1,4 +1,5 @@
 mod clipboard;
+mod files;
 mod images;
 mod store;
 
@@ -179,10 +180,10 @@ fn record_text(state: &AppState, text: String) -> bool {
 }
 
 fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snapshot: Snapshot) -> bool {
-    let (id, max_bytes, images_dir, blob_path) = {
+    let (id, max_bytes, images_dir, files_dir, blob_path) = {
         let history = state.history.lock().unwrap();
         let id = history.next_id();
-        (id, history.max_bytes(), history.images_dir(), history.blob_path(id))
+        (id, history.max_bytes(), history.images_dir(), history.files_dir(), history.blob_path(id))
     };
     // Something bigger than the whole storage cap: keep just its text, if any.
     if snapshot.total_bytes() as u64 > max_bytes {
@@ -203,7 +204,10 @@ fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snaps
     } else {
         (ClipKind::Other, String::new())
     };
-    let hash = snapshot.hash();
+    let hash = match kind {
+        ClipKind::Files => files::fingerprint(snapshot.hash(), &files),
+        _ => snapshot.hash(),
+    };
     if state.history.lock().unwrap().is_same_as_newest(kind, &preview, hash) {
         return false;
     }
@@ -236,6 +240,12 @@ fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snaps
             }
             clip.on_disk = true;
         }
+    }
+
+    if kind == ClipKind::Files {
+        let (saved, bytes) = files::save_copies(&files_dir, id, &files);
+        clip.saved_files = saved;
+        clip.size += bytes;
     }
 
     let mut history = state.history.lock().unwrap();
@@ -287,6 +297,12 @@ fn copy_clip(app: AppHandle, state: tauri::State<AppState>, id: u64) -> Result<(
         ),
         (None, false) => None,
     };
+
+    // Paste Cliplog's saved copies of small files rather than the originals.
+    let snapshot = snapshot.map(|s| {
+        s.with_file_paths(|p| files::lookup(&clip.saved_files, p).map(String::from))
+            .unwrap_or(s)
+    });
 
     match snapshot {
         Some(snapshot) if clipboard::SUPPORTED => clipboard::write(&snapshot)?,

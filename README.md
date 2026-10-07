@@ -29,7 +29,9 @@ Cliplog remembers the last 100 things you copied: text, images, files, and anyth
 | Files in Finder / Explorer | the file names | the same files (see note below) |
 | App-specific content (a Figma layer, Excel cells, a Photoshop selection, …) | “Content from an app” | the same content, as long as the app you paste into understands it |
 
-> **Note on copied files:** copying a file puts a *reference* to it on the clipboard (its location), not the file itself. Cliplog saves that reference. If the file is later moved, renamed or deleted, pasting that clip won't find it.
+> **Note on copied files:** copying a file puts a *reference* to it on the clipboard (its location), not the file itself.
+> - **Small files (32 KB or less):** Cliplog saves its own copy, and pasting the clip uses that copy. You get the file as it was when you copied it, even if the original was later moved, edited or deleted. These show a "saved" tag in the popup.
+> - **Bigger files and folders:** Cliplog keeps only the reference. If the original is moved, renamed or deleted, pasting that clip won't find it.
 
 Other edge cases:
 
@@ -60,6 +62,7 @@ Password managers mark the passwords they copy as secret, and Cliplog doesn't re
 | `history.json` | the list of clips; small clips (under 32 KB) are stored here directly |
 | `data/<id>.clip` | larger clips such as screenshots, one file each |
 | `images/<id>.thumb.png` | thumbnails shown in the popup |
+| `files/<id>/` | saved copies of small copied files |
 
 Clips are pruned whenever the history changes: first down to "Clips to keep", then oldest-first until everything fits under "Max storage". Files belonging to removed clips are deleted right away. Delete the folder to reset Cliplog.
 

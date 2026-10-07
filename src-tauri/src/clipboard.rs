@@ -18,8 +18,9 @@
 //!
 //! Known limitations (also in the README):
 //! - **Copied files are references, not contents.** Copying a file in
-//!   Finder/Explorer puts its *path* on the clipboard. If the file is later
-//!   moved, renamed or deleted, pasting that clip will fail or paste nothing.
+//!   Finder/Explorer puts its *path* on the clipboard. Cliplog saves its own
+//!   copy of small files (see `files.rs`); for bigger files, if the original is
+//!   later moved, renamed or deleted, pasting that clip will fail.
 //! - Some formats only make sense while the source app is still running (OLE
 //!   objects on Windows, file promises on macOS). Those are skipped.
 //! - Content marked as secret by password managers is never recorded (see
@@ -133,6 +134,56 @@ impl Snapshot {
         self.formats().all(|f| f.name == MAC_TEXT || f.name == WIN_UNICODE_TEXT)
     }
 
+    /// Returns a copy of this file clip with some file paths replaced (via
+    /// `map`), or None if nothing was replaced. Used to paste Cliplog's saved
+    /// copies of files instead of the originals.
+    pub fn with_file_paths(&self, map: impl Fn(&str) -> Option<String>) -> Option<Snapshot> {
+        // macOS: one item per file. Rebuild the items whose file was replaced,
+        // dropping formats (icons, private Finder data) tied to the original.
+        if self.formats().any(|f| f.name == MAC_FILE_URL) {
+            let mut changed = false;
+            let items = self
+                .items
+                .iter()
+                .map(|item| {
+                    let path = item
+                        .iter()
+                        .find(|f| f.name == MAC_FILE_URL)
+                        .and_then(|f| std::str::from_utf8(&f.data).ok().and_then(file_url_to_path));
+                    match path.as_deref().and_then(&map) {
+                        Some(new) => {
+                            changed = true;
+                            let name = new.rsplit('/').next().unwrap_or(&new).to_string();
+                            vec![
+                                Format { name: MAC_FILE_URL.into(), data: path_to_file_url(&new).into_bytes() },
+                                Format { name: MAC_TEXT.into(), data: name.into_bytes() },
+                            ]
+                        }
+                        None => item.clone(),
+                    }
+                })
+                .collect();
+            return changed.then_some(Snapshot { items });
+        }
+
+        // Windows: a single file list. Rebuild it and drop the other file
+        // formats (e.g. "Shell IDList Array"), which Explorer would otherwise
+        // prefer and which point at the originals.
+        let paths = self.find(WIN_HDROP).map(|f| parse_hdrop(&f.data))?;
+        let mapped: Vec<Option<String>> = paths.iter().map(|p| map(p)).collect();
+        if mapped.iter().all(Option::is_none) {
+            return None;
+        }
+        let new_paths: Vec<String> = paths.into_iter().zip(mapped).map(|(p, m)| m.unwrap_or(p)).collect();
+        Some(Snapshot {
+            items: vec![vec![
+                Format { name: WIN_HDROP.into(), data: build_hdrop(&new_paths) },
+                // DROPEFFECT_COPY, so pasting never *moves* Cliplog's copy away.
+                Format { name: "Preferred DropEffect".into(), data: 1u32.to_le_bytes().to_vec() },
+            ]],
+        })
+    }
+
     /// Keeps only the plain-text formats (used when a clip is too big).
     pub fn retain_text(&mut self) {
         for item in &mut self.items {
@@ -225,6 +276,32 @@ fn file_url_to_path(url: &str) -> Option<String> {
     }
     let path = String::from_utf8(out).ok()?;
     Some(path.trim_end_matches('/').to_string())
+}
+
+fn path_to_file_url(path: &str) -> String {
+    let mut url = String::from("file://");
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
+}
+
+/// Builds a Windows CF_HDROP: a DROPFILES header followed by NUL-separated
+/// UTF-16 paths and a final NUL.
+fn build_hdrop(paths: &[String]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&20u32.to_le_bytes()); // offset of the file list
+    out.extend_from_slice(&[0; 12]); // pt.x, pt.y, fNC
+    out.extend_from_slice(&1u32.to_le_bytes()); // fWide: UTF-16
+    for p in paths {
+        out.extend(p.encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()));
+    }
+    out.extend_from_slice(&[0, 0]);
+    out
 }
 
 /// Parses a Windows CF_HDROP (DROPFILES struct followed by a list of
@@ -495,6 +572,32 @@ mod tests {
         hdrop.extend("C:\\a.txt\0C:\\b\0\0".encode_utf16().flat_map(|u| u.to_le_bytes()));
         let h = Snapshot { items: vec![vec![fmt(WIN_HDROP, &hdrop)]] };
         assert_eq!(h.files(), ["C:\\a.txt", "C:\\b"]);
+    }
+
+    #[test]
+    fn rewrites_file_paths() {
+        let map = |p: &str| (p.ends_with("a.txt")).then(|| "/saved/1/0/a b.txt".to_string());
+        let mac = Snapshot {
+            items: vec![
+                vec![fmt(MAC_FILE_URL, b"file:///Users/me/a.txt"), fmt("public.tiff", b"icon")],
+                vec![fmt(MAC_FILE_URL, b"file:///Users/me/big.mov")],
+            ],
+        };
+        let out = mac.with_file_paths(map).unwrap();
+        assert_eq!(out.files(), ["/saved/1/0/a b.txt", "/Users/me/big.mov"]);
+        assert_eq!(out.items[0].len(), 2); // icon dropped, name added
+        assert_eq!(out.items[1], mac.items[1]);
+        assert!(mac.with_file_paths(|_| None).is_none());
+
+        let win = Snapshot {
+            items: vec![vec![
+                fmt(WIN_HDROP, &build_hdrop(&["C:\\x\\a.txt".into(), "C:\\x\\big.mov".into()])),
+                fmt("Shell IDList Array", b"pidl"),
+            ]],
+        };
+        let out = win.with_file_paths(map).unwrap();
+        assert_eq!(out.files(), ["/saved/1/0/a b.txt", "C:\\x\\big.mov"]);
+        assert!(out.items[0].iter().all(|f| f.name != "Shell IDList Array"));
     }
 
     /// Writes to and reads from the real clipboard, so it's opt-in:

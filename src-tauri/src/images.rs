@@ -53,14 +53,16 @@ pub fn thumbnail_data_url(dir: &Path, id: u64) -> Option<String> {
     Some(format!("data:image/png;base64,{b64}"))
 }
 
-/// Deletes files (named `<id>.<ext>`) whose clip is no longer in the history.
+/// Deletes files and folders (named `<id>` or `<id>.<ext>`) whose clip is no
+/// longer in the history.
 pub fn prune(dir: &Path, keep: impl Fn(u64) -> bool) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let id = name.to_str().and_then(|n| n.split('.').next()).and_then(|n| n.parse().ok());
         if id.is_some_and(|id| !keep(id)) {
-            let _ = fs::remove_file(entry.path());
+            let path = entry.path();
+            let _ = if path.is_dir() { fs::remove_dir_all(path) } else { fs::remove_file(path) };
         }
     }
 }
