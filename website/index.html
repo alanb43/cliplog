@@ -116,7 +116,7 @@
             <strong>Download for Windows</strong><small>Windows 10 &amp; 11 · 64-bit</small>
           </a>
         </div>
-        <p class="meta" id="version">Free forever · MIT licensed</p>
+        <p class="meta" id="version">MIT licensed</p>
       </div>
 
       <div class="mock" aria-hidden="true">
@@ -147,8 +147,8 @@
 
   <section>
     <div class="wrap">
-      <h2>Opening it the first time</h2>
-      <p style="color:var(--muted);margin-top:-12px">Cliplog is a free hobby project, so it isn’t signed with a paid Apple or Microsoft certificate yet. Your computer will ask you to confirm once.</p>
+      <h2>Opening Cliplog for the first time</h2>
+      <p style="color:var(--muted);margin-top:-12px">Cliplog is a free open source project, so it isn’t signed with a paid Apple or Microsoft certificate yet. Your computer will ask you to confirm the installation.</p>
       <div class="two">
         <div class="card">
           <h3>Mac</h3>
@@ -198,7 +198,7 @@
         const exe = find(/-setup\.exe$/i) || find(/\.msi$/i);
         if (dmg) document.getElementById("dl-mac").href = dmg.browser_download_url;
         if (exe) document.getElementById("dl-win").href = exe.browser_download_url;
-        document.getElementById("version").textContent = `Version ${release.tag_name.replace(/^v/, "")} · Free forever · MIT licensed`;
+        document.getElementById("version").textContent = `Version ${release.tag_name.replace(/^v/, "")} · MIT licensed`;
       })
       .catch(() => {}); // Buttons already fall back to the releases page.
   </script>
