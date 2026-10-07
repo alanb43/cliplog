@@ -13,7 +13,7 @@ Cliplog remembers the last 100 things you copied: text, images, files, and anyth
 - Remembers **everything** you copy, not just text. Each clip is saved in every format the source app provided (plain text, rich text, HTML, images, file references, app-specific data), so pasting it later works just like pasting the original.
 - Copying something already in the history moves it to the top instead of adding a duplicate.
 - Skips anything a password manager marks as secret (see [Privacy](#privacy)).
-- You choose how many clips to keep (default 100) and how much disk space they may use (default 500 MB). The oldest clips are removed first.
+- You choose how many clips to keep (default 100), how much disk space they may use (default 500 MB), and the max size of a clip kept in memory (default 32 KB). The oldest clips are removed first.
 - Global shortcut, configurable in Settings (default <kbd>⌘ Shift V</kbd> / <kbd>Ctrl Shift V</kbd>).
 - Shows 25 clips by default. **Show more** reveals more, and both numbers can be changed in Settings.
 - Search box, keyboard navigation (<kbd>↑</kbd> <kbd>↓</kbd> <kbd>Enter</kbd>, <kbd>⌘/Ctrl 1–9</kbd>), and <kbd>Esc</kbd> or clicking away to close.
@@ -30,14 +30,25 @@ Cliplog remembers the last 100 things you copied: text, images, files, and anyth
 | App-specific content (a Figma layer, Excel cells, a Photoshop selection, …) | “Content from an app” | the same content, as long as the app you paste into understands it |
 
 > **Note on copied files:** copying a file puts a *reference* to it on the clipboard (its location), not the file itself.
-> - **Small files (32 KB or less):** Cliplog saves its own copy, and pasting the clip uses that copy. You get the file as it was when you copied it, even if the original was later moved, edited or deleted. These show a "saved" tag in the popup.
-> - **Bigger files and folders:** Cliplog keeps only the reference. If the original is moved, renamed or deleted, pasting that clip won't find it.
+> - **Files up to the max clip size in memory (default 32 KB):** Cliplog stores the file's contents in the clip, just like text or image data. Pasting gives you the file as it was when you copied it, even if the original was later moved, edited or deleted. Finder and Explorer can only paste real files, so Cliplog writes the file to a temporary cache folder at paste time. That folder only ever holds the last pasted clip's files.
+> - **Bigger files and folders:** Cliplog keeps only the reference, shown as "File link" in the popup. If the original is moved, renamed or deleted, pasting that clip won't find it.
 
 Other edge cases:
 
 - Some apps provide clipboard data only while they're still running. If an app quits before Cliplog can read its copy, that copy may be missing or incomplete.
 - A small number of formats only work while the source app is running (OLE objects on Windows, file promises on macOS), so Cliplog skips them.
 - Anything bigger than your storage limit keeps only its text. Single formats over 100 MB are skipped.
+
+## Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| Keyboard shortcut | ⌘⇧V / Ctrl+Shift+V | Opens the popup from anywhere |
+| Clips shown at first / after "Show more" | 25 / 100 | How many clips the popup lists |
+| Clips to keep | 100 | Older clips are removed |
+| Max storage | 500 MB | Oldest clips are removed until everything fits |
+| Max clip size in memory | 32 KB | Clips up to this size stay in memory (copied files included); bigger clips are saved to disk, bigger files are kept as links |
+| Start at login | on | Launch Cliplog when you log in |
 
 ## Privacy
 
@@ -59,10 +70,9 @@ Password managers mark the passwords they copy as secret, and Cliplog doesn't re
 | File | Contents |
 |---|---|
 | `settings.json` | your preferences |
-| `history.json` | the list of clips; small clips (under 32 KB) are stored here directly |
+| `history.json` | the list of clips; clips up to the max clip size in memory are stored here directly |
 | `data/<id>.clip` | larger clips such as screenshots, one file each |
 | `images/<id>.thumb.png` | thumbnails shown in the popup |
-| `files/<id>/` | saved copies of small copied files |
 
 Clips are pruned whenever the history changes: first down to "Clips to keep", then oldest-first until everything fits under "Max storage". Files belonging to removed clips are deleted right away. Delete the folder to reset Cliplog.
 

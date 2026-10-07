@@ -7,6 +7,7 @@ const login = document.getElementById("login");
 const keep = document.getElementById("keep");
 const storage = document.getElementById("storage");
 const usage = document.getElementById("usage");
+const clipKb = document.getElementById("clipkb");
 const statusEl = document.getElementById("status");
 const clearBtn = document.getElementById("clear");
 
@@ -28,6 +29,7 @@ async function load() {
   login.checked = s.launchAtLogin;
   keep.value = s.historySize;
   storage.value = s.maxStorageMb;
+  clipKb.value = s.clipMemoryKb;
   const u = await invoke("get_storage_usage");
   const mb = u.bytes / 1024 / 1024;
   usage.textContent = `Currently storing ${u.clips} clip${u.clips === 1 ? "" : "s"} using ${mb < 0.1 ? "under 0.1" : mb.toFixed(1)} MB. ` +
@@ -83,6 +85,7 @@ form.addEventListener("submit", async (e) => {
         launchAtLogin: login.checked,
         historySize: Number(keep.value),
         maxStorageMb: Number(storage.value),
+        clipMemoryKb: Number(clipKb.value),
       },
     });
     await load();

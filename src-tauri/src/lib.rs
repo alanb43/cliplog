@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use clipboard::Snapshot;
-use store::{Clip, ClipKind, History, ImageInfo, Settings, INLINE_LIMIT};
+use store::{Clip, ClipKind, History, ImageInfo, Settings};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
@@ -26,6 +26,8 @@ struct AppState {
     /// Clipboard change number right after Cliplog itself wrote to it, so the
     /// watcher can skip it.
     ignore_seq: Mutex<Option<u32>>,
+    /// Where stored files are written out when pasted (see files.rs).
+    paste_dir: PathBuf,
 }
 
 const OVERLAY: &str = "overlay";
@@ -180,10 +182,10 @@ fn record_text(state: &AppState, text: String) -> bool {
 }
 
 fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snapshot: Snapshot) -> bool {
-    let (id, max_bytes, images_dir, files_dir, blob_path) = {
+    let (id, max_bytes, memory_limit, images_dir, blob_path) = {
         let history = state.history.lock().unwrap();
         let id = history.next_id();
-        (id, history.max_bytes(), history.images_dir(), history.files_dir(), history.blob_path(id))
+        (id, history.max_bytes(), history.memory_limit(), history.images_dir(), history.blob_path(id))
     };
     // Something bigger than the whole storage cap: keep just its text, if any.
     if snapshot.total_bytes() as u64 > max_bytes {
@@ -204,16 +206,20 @@ fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snaps
     } else {
         (ClipKind::Other, String::new())
     };
-    let hash = match kind {
-        ClipKind::Files => files::fingerprint(snapshot.hash(), &files),
-        _ => snapshot.hash(),
+    // Small copied files are stored in the clip like any other data; bigger
+    // ones stay links to the original.
+    let stored_files = match kind {
+        ClipKind::Files => files::embed(&mut snapshot, &files, memory_limit as u64),
+        _ => 0,
     };
+    let hash = snapshot.hash();
     if state.history.lock().unwrap().is_same_as_newest(kind, &preview, hash) {
         return false;
     }
 
     let mut clip = Clip::new(id, kind, preview);
     clip.hash = hash;
+    clip.stored_files = stored_files;
     if kind == ClipKind::Image {
         if let Ok(img) = decoder.get_image() {
             let (width, height) = (img.width as u32, img.height as u32);
@@ -225,12 +231,12 @@ fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snaps
         }
     }
 
-    // Plain text needs nothing but the text. Small clips keep their raw data
-    // in history.json; big ones (screenshots etc.) get their own file.
+    // Plain text needs nothing but the text. Clips up to the in-memory limit
+    // keep their raw data in history.json; bigger ones get their own file.
     if !(kind == ClipKind::Text && snapshot.is_plain_text_only()) {
         let size = snapshot.total_bytes();
         clip.size = size as u64;
-        if size <= INLINE_LIMIT {
+        if size <= memory_limit {
             clip.data = Some(snapshot);
         } else {
             let tmp = blob_path.with_extension("clip.tmp");
@@ -240,12 +246,6 @@ fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snaps
             }
             clip.on_disk = true;
         }
-    }
-
-    if kind == ClipKind::Files {
-        let (saved, bytes) = files::save_copies(&files_dir, id, &files);
-        clip.saved_files = saved;
-        clip.size += bytes;
     }
 
     let mut history = state.history.lock().unwrap();
@@ -298,11 +298,8 @@ fn copy_clip(app: AppHandle, state: tauri::State<AppState>, id: u64) -> Result<(
         (None, false) => None,
     };
 
-    // Paste Cliplog's saved copies of small files rather than the originals.
-    let snapshot = snapshot.map(|s| {
-        s.with_file_paths(|p| files::lookup(&clip.saved_files, p).map(String::from))
-            .unwrap_or(s)
-    });
+    // Stored files are written out so Finder/Explorer can paste them.
+    let snapshot = snapshot.map(|s| files::materialize(&s, &state.paste_dir)).transpose()?;
 
     match snapshot {
         Some(snapshot) if clipboard::SUPPORTED => clipboard::write(&snapshot)?,
@@ -456,6 +453,8 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let data_dir = app.path().app_data_dir()?;
+            let paste_dir = app.path().app_cache_dir()?.join("paste");
+            let _ = std::fs::remove_dir_all(&paste_dir);
             std::fs::create_dir_all(&data_dir)?;
             let (settings, first_run) = Settings::load(&data_dir);
             let history = History::load(&data_dir, &settings);
@@ -475,6 +474,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 last_text: Mutex::new(None),
                 ignore_seq: Mutex::new(None),
+                paste_dir,
             });
 
             // Tray / menu-bar icon.

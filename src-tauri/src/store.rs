@@ -3,14 +3,15 @@
 //! ```text
 //! settings.json          user preferences
 //! history.json           the list of clips, newest first
-//! data/<id>.clip         raw clipboard data for clips over INLINE_LIMIT bytes
+//! data/<id>.clip         raw clipboard data for clips over the in-memory limit
 //! images/<id>.thumb.png  preview thumbnail for image clips
-//! files/<id>/            saved copies of small copied files (see files.rs)
 //! ```
 //!
-//! Small clips keep their raw data inside history.json; bigger ones (screenshots,
-//! large documents) are written to their own file under `data/` so history.json
-//! stays small and quick to rewrite. Plain-text-only clips store just the text.
+//! Clips up to the user's "max clip size in memory" (default 32 KB) are kept in
+//! memory and in history.json; bigger ones (screenshots, large documents) are
+//! written to their own file under `data/` and only read back when pasted.
+//! Plain-text-only clips store just the text. Copied files at or under the
+//! limit have their contents stored in the clip too (see files.rs).
 //!
 //! The history is pruned whenever it changes: first to the user's
 //! "clips to keep" count, then oldest-first until the total stored size is
@@ -18,20 +19,19 @@
 //! deleted on every save.
 
 use crate::clipboard::Snapshot;
-use crate::files::SavedFile;
 use crate::images;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Clips whose raw data is at most this size stay inline in history.json.
-pub const INLINE_LIMIT: usize = 32 * 1024;
 
 pub const DEFAULT_HISTORY_SIZE: usize = 100;
 pub const HISTORY_SIZE_RANGE: (usize, usize) = (1, 1000);
 pub const DEFAULT_MAX_STORAGE_MB: u64 = 500;
 pub const MAX_STORAGE_MB_RANGE: (u64, u64) = (10, 100_000);
+pub const DEFAULT_CLIP_MEMORY_KB: u64 = 32;
+pub const CLIP_MEMORY_KB_RANGE: (u64, u64) = (1, 10 * 1024);
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -75,9 +75,10 @@ pub struct Clip {
     /// Raw data lives in `data/<id>.clip`.
     #[serde(default)]
     pub on_disk: bool,
-    /// Cliplog's own copies of the files in a file clip.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub saved_files: Vec<SavedFile>,
+    /// For file clips: how many files had their contents stored in the clip
+    /// (the rest are links to the original).
+    #[serde(default)]
+    pub stored_files: usize,
 }
 
 impl Clip {
@@ -92,7 +93,7 @@ impl Clip {
             hash: 0,
             data: None,
             on_disk: false,
-            saved_files: Vec::new(),
+            stored_files: 0,
         }
     }
 
@@ -111,6 +112,8 @@ pub struct History {
     max_clips: usize,
     #[serde(skip)]
     max_bytes: u64,
+    #[serde(skip)]
+    memory_limit: usize,
 }
 
 fn now_ms() -> u64 {
@@ -153,9 +156,6 @@ impl History {
         self.dir.join("images")
     }
 
-    pub fn files_dir(&self) -> PathBuf {
-        self.dir.join("files")
-    }
 
     pub fn blob_path(&self, id: u64) -> PathBuf {
         self.data_dir().join(format!("{id}.clip"))
@@ -172,13 +172,15 @@ impl History {
         let keep = |id: u64| self.clips.iter().any(|c| c.id == id);
         images::prune(&self.images_dir(), keep);
         images::prune(&self.data_dir(), keep);
-        images::prune(&self.files_dir(), keep);
+        // Saved file copies from an earlier build; file contents now live in the clip.
+        let _ = fs::remove_dir_all(self.dir.join("files"));
     }
 
     /// Applies the user's limits and prunes right away if they shrank.
     pub fn set_limits(&mut self, settings: &Settings) {
         self.max_clips = settings.history_size;
         self.max_bytes = settings.max_storage_mb * 1024 * 1024;
+        self.memory_limit = (settings.clip_memory_kb * 1024) as usize;
         self.enforce_limits();
     }
 
@@ -197,6 +199,11 @@ impl History {
 
     pub fn max_bytes(&self) -> u64 {
         self.max_bytes
+    }
+
+    /// Clips up to this many bytes are kept in memory / history.json.
+    pub fn memory_limit(&self) -> usize {
+        self.memory_limit
     }
 
     pub fn next_id(&self) -> u64 {
@@ -268,6 +275,9 @@ pub struct Settings {
     pub history_size: usize,
     /// Total disk space clips may use, in megabytes.
     pub max_storage_mb: u64,
+    /// Clips up to this size (KB) are kept in memory; bigger ones are saved
+    /// to disk, and bigger copied files are kept only as a link.
+    pub clip_memory_kb: u64,
 }
 
 impl Default for Settings {
@@ -279,6 +289,7 @@ impl Default for Settings {
             launch_at_login: true,
             history_size: DEFAULT_HISTORY_SIZE,
             max_storage_mb: DEFAULT_MAX_STORAGE_MB,
+            clip_memory_kb: DEFAULT_CLIP_MEMORY_KB,
         }
     }
 }
@@ -305,6 +316,7 @@ impl Settings {
     pub fn clamped(mut self) -> Self {
         self.history_size = self.history_size.clamp(HISTORY_SIZE_RANGE.0, HISTORY_SIZE_RANGE.1);
         self.max_storage_mb = self.max_storage_mb.clamp(MAX_STORAGE_MB_RANGE.0, MAX_STORAGE_MB_RANGE.1);
+        self.clip_memory_kb = self.clip_memory_kb.clamp(CLIP_MEMORY_KB_RANGE.0, CLIP_MEMORY_KB_RANGE.1);
         self.quick_count = self.quick_count.clamp(1, self.history_size);
         self.expanded_count = self.expanded_count.clamp(1, self.history_size);
         self
@@ -417,7 +429,9 @@ mod tests {
 
     #[test]
     fn settings_are_clamped() {
-        let s = Settings { history_size: 5000, max_storage_mb: 1, quick_count: 0, expanded_count: 2000, ..Settings::default() }.clamped();
+        let s = Settings { history_size: 5000, max_storage_mb: 1, quick_count: 0, expanded_count: 2000, clip_memory_kb: 0, ..Settings::default() }.clamped();
         assert_eq!((s.history_size, s.max_storage_mb, s.quick_count, s.expanded_count), (1000, 10, 1, 1000));
+        assert_eq!(s.clip_memory_kb, 1);
+        assert_eq!(Settings::default().clip_memory_kb, 32);
     }
 }

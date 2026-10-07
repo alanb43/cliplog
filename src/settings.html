@@ -38,6 +38,11 @@
         <input id="storage" type="number" min="10" max="100000" required />
       </label>
     </div>
+    <label class="field">
+      <span>Max clip size in memory (KB)</span>
+      <input id="clipkb" type="number" min="1" max="10240" required />
+      <small>Clips up to this size are kept in memory, including copied files. Bigger clips are saved to disk, and bigger files are kept as a link to the original.</small>
+    </label>
     <small id="usage" class="usage"></small>
 
     <label class="check">
