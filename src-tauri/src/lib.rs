@@ -1,10 +1,11 @@
+mod images;
 mod store;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use store::{Clip, History, Settings};
+use store::{Clip, ClipKind, History, ImageInfo, Settings};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
@@ -18,6 +19,9 @@ struct AppState {
     /// Last clipboard text we've seen, so the watcher only records changes
     /// (and doesn't re-record text Cliplog itself put on the clipboard).
     last_text: Mutex<Option<String>>,
+    /// Clipboard change number right after Cliplog itself wrote to it, so the
+    /// watcher can skip it.
+    ignore_seq: Mutex<Option<u32>>,
 }
 
 const OVERLAY: &str = "overlay";
@@ -109,7 +113,14 @@ fn clipboard_sequence() -> Option<u32> {
     Some(unsafe { GetClipboardSequenceNumber() })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn clipboard_sequence() -> Option<u32> {
+    #[allow(unused_unsafe)]
+    let count = unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() };
+    Some(count as u32)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn clipboard_sequence() -> Option<u32> {
     None
 }
@@ -130,24 +141,78 @@ fn start_clipboard_watcher(app: AppHandle) {
                 continue;
             }
             last_seq = seq;
-
-            let Ok(text) = clipboard.get_text() else { continue };
             let state = app.state::<AppState>();
-            {
-                let mut last = state.last_text.lock().unwrap();
-                if last.as_deref() == Some(text.as_str()) {
-                    continue;
-                }
-                *last = Some(text.clone());
+            if seq.is_some() && seq == *state.ignore_seq.lock().unwrap() {
+                continue;
             }
-            let mut history = state.history.lock().unwrap();
-            if history.push(text) {
-                history.save();
-                drop(history);
+
+            let changed = if let Ok(text) = clipboard.get_text() {
+                record_text(&state, text)
+            } else if seq.is_some() {
+                // Images are only checked when we know the clipboard changed;
+                // reading one is too expensive to do on every poll.
+                match clipboard.get_image() {
+                    Ok(img) => record_image(&state, img),
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+            if changed {
                 let _ = app.emit("history-changed", ());
             }
         }
     });
+}
+
+fn record_text(state: &AppState, text: String) -> bool {
+    {
+        let mut last = state.last_text.lock().unwrap();
+        if last.as_deref() == Some(text.as_str()) {
+            return false;
+        }
+        *last = Some(text.clone());
+    }
+    let mut history = state.history.lock().unwrap();
+    let changed = history.push(text);
+    if changed {
+        history.save();
+    }
+    changed
+}
+
+fn record_image(state: &AppState, img: arboard::ImageData) -> bool {
+    *state.last_text.lock().unwrap() = None;
+    if img.bytes.len() > images::MAX_IMAGE_BYTES {
+        return false;
+    }
+    let (width, height) = (img.width as u32, img.height as u32);
+    let hash = images::hash(width, height, &img.bytes);
+
+    let id = {
+        let mut history = state.history.lock().unwrap();
+        if let Some(id) = history.find_image(hash) {
+            // Already have it: just move it to the top.
+            if history.clips.first().map(|c| c.id) == Some(id) {
+                return false;
+            }
+            history.promote(id);
+            history.save();
+            return true;
+        }
+        history.next_id()
+    };
+
+    // Encode outside the lock so the overlay stays responsive.
+    let dir = state.history.lock().unwrap().images_dir.clone();
+    if let Err(e) = images::save(&dir, id, width, height, img.bytes.into_owned()) {
+        eprintln!("could not save image: {e}");
+        return false;
+    }
+    let mut history = state.history.lock().unwrap();
+    history.push_image(id, ImageInfo { width, height, hash });
+    history.save();
+    true
 }
 
 // ---------- shortcut & autostart ----------
@@ -177,19 +242,39 @@ fn get_history(state: tauri::State<AppState>) -> Vec<Clip> {
 
 #[tauri::command]
 fn copy_clip(app: AppHandle, state: tauri::State<AppState>, id: u64) -> Result<(), String> {
-    let text = {
+    let (clip, images_dir) = {
         let mut history = state.history.lock().unwrap();
-        let text = history.promote(id).ok_or("Clip not found")?;
+        let clip = history.promote(id).ok_or("Clip not found")?;
         history.save();
-        text
+        (clip, history.images_dir.clone())
     };
-    *state.last_text.lock().unwrap() = Some(text.clone());
-    arboard::Clipboard::new()
-        .and_then(|mut c| c.set_text(text))
-        .map_err(|e| e.to_string())?;
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    match clip.kind {
+        ClipKind::Text => {
+            *state.last_text.lock().unwrap() = Some(clip.text.clone());
+            clipboard.set_text(clip.text).map_err(|e| e.to_string())?;
+        }
+        ClipKind::Image => {
+            let (width, height, bytes) = images::load(&images_dir, id)?;
+            clipboard
+                .set_image(arboard::ImageData {
+                    width: width as usize,
+                    height: height as usize,
+                    bytes: bytes.into(),
+                })
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    *state.ignore_seq.lock().unwrap() = clipboard_sequence();
     let _ = app.emit("history-changed", ());
     dismiss_overlay(&app);
     Ok(())
+}
+
+#[tauri::command]
+fn get_thumbnail(state: tauri::State<AppState>, id: u64) -> Option<String> {
+    let dir = state.history.lock().unwrap().images_dir.clone();
+    images::thumbnail_data_url(&dir, id)
 }
 
 #[tauri::command]
@@ -277,6 +362,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_history,
             copy_clip,
+            get_thumbnail,
             delete_clip,
             clear_history,
             hide_overlay,
@@ -309,6 +395,7 @@ pub fn run() {
                 history: Mutex::new(history),
                 settings: Mutex::new(settings),
                 last_text: Mutex::new(None),
+                ignore_seq: Mutex::new(None),
             });
 
             // Tray / menu-bar icon.

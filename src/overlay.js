@@ -8,6 +8,24 @@ let settings = { quickCount: 25, expandedCount: 100 };
 let expanded = false;
 let selected = 0;
 let visible = [];
+const thumbs = new Map(); // clip id -> data URL
+
+function label(clip) {
+  return clip.kind === "image" ? `Image ${clip.image.width}×${clip.image.height}` : clip.text;
+}
+
+function thumbnail(clip) {
+  const img = document.createElement("img");
+  img.alt = label(clip);
+  if (thumbs.has(clip.id)) {
+    img.src = thumbs.get(clip.id);
+  } else {
+    invoke("get_thumbnail", { id: clip.id }).then((url) => {
+      if (url) { thumbs.set(clip.id, url); img.src = url; }
+    });
+  }
+  return img;
+}
 
 function timeAgo(ms) {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
@@ -20,15 +38,15 @@ function timeAgo(ms) {
 function render() {
   const q = searchEl.value.trim().toLowerCase();
   const limit = expanded ? settings.expandedCount : settings.quickCount;
-  visible = q ? clips.filter((c) => c.text.toLowerCase().includes(q)) : clips.slice(0, limit);
+  visible = q ? clips.filter((c) => label(c).toLowerCase().includes(q)) : clips.slice(0, limit);
   selected = Math.min(selected, Math.max(visible.length - 1, 0));
 
   listEl.replaceChildren(
     ...visible.map((clip, i) => {
       const li = document.createElement("li");
       li.role = "option";
-      li.className = i === selected ? "selected" : "";
-      li.title = clip.text.length > 2000 ? clip.text.slice(0, 2000) + "…" : clip.text;
+      if (i === selected) li.classList.add("selected");
+      li.title = clip.text.length > 2000 ? clip.text.slice(0, 2000) + "…" : label(clip);
 
       const num = document.createElement("span");
       num.className = "num";
@@ -36,7 +54,14 @@ function render() {
 
       const text = document.createElement("span");
       text.className = "text";
-      text.textContent = clip.text.replace(/\s+/g, " ").trim().slice(0, 300);
+      if (clip.kind === "image") {
+        li.classList.add("image");
+        const size = document.createElement("small");
+        size.textContent = `${clip.image.width}×${clip.image.height}`;
+        text.append(thumbnail(clip), size);
+      } else {
+        text.textContent = clip.text.replace(/\s+/g, " ").trim().slice(0, 300);
+      }
 
       const when = document.createElement("span");
       when.className = "when";

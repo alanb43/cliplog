@@ -49,6 +49,12 @@ button, input { font: inherit; color: inherit; }
 #list li.selected { background: var(--accent-soft); }
 #list .num { width: 30px; flex: none; color: var(--muted); font-size: 11px; }
 #list .text { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#list li.image .text { display: flex; align-items: center; gap: 10px; }
+#list li.image img {
+  max-width: 200px; max-height: 80px; border-radius: 4px;
+  border: 1px solid var(--border); background: repeating-conic-gradient(var(--bg-soft) 0 25%, var(--bg) 0 50%) 0 0 / 12px 12px;
+}
+#list li.image small { color: var(--muted); font-size: 11px; }
 #list .when { color: var(--muted); font-size: 11px; flex: none; }
 #list .del {
   visibility: hidden; flex: none; border: 0; background: none; color: var(--muted);

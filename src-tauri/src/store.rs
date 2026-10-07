@@ -1,6 +1,7 @@
 //! Clipboard history and user settings, persisted as small JSON files in the
 //! app's data directory.
 
+use crate::images;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,12 +12,33 @@ pub const MAX_HISTORY: usize = 100;
 /// Clips larger than this are not stored (keeps the history file small).
 pub const MAX_CLIP_BYTES: usize = 1024 * 1024;
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipKind {
+    #[default]
+    Text,
+    Image,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageInfo {
+    pub width: u32,
+    pub height: u32,
+    pub hash: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Clip {
     pub id: u64,
+    #[serde(default)]
+    pub kind: ClipKind,
+    /// The copied text; empty for images.
     pub text: String,
     pub copied_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageInfo>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -24,6 +46,8 @@ pub struct History {
     pub clips: Vec<Clip>,
     #[serde(skip)]
     path: PathBuf,
+    #[serde(skip)]
+    pub images_dir: PathBuf,
 }
 
 fn now_ms() -> u64 {
@@ -42,6 +66,8 @@ impl History {
             .unwrap_or_default();
         history.clips.truncate(MAX_HISTORY);
         history.path = path;
+        history.images_dir = dir.join("images");
+        let _ = fs::create_dir_all(&history.images_dir);
         history
     }
 
@@ -52,6 +78,34 @@ impl History {
                 let _ = fs::rename(&tmp, &self.path);
             }
         }
+        images::prune(&self.images_dir, |id| self.clips.iter().any(|c| c.id == id));
+    }
+
+    pub fn next_id(&self) -> u64 {
+        self.clips.iter().map(|c| c.id).max().unwrap_or(0).max(now_ms()) + 1
+    }
+
+    fn insert_top(&mut self, clip: Clip) {
+        self.clips.insert(0, clip);
+        self.clips.truncate(MAX_HISTORY);
+    }
+
+    pub fn find_image(&self, hash: u64) -> Option<u64> {
+        self.clips
+            .iter()
+            .find(|c| c.image.as_ref().is_some_and(|i| i.hash == hash))
+            .map(|c| c.id)
+    }
+
+    /// Adds an image whose files were already written with `images::save`.
+    pub fn push_image(&mut self, id: u64, info: ImageInfo) {
+        self.insert_top(Clip {
+            id,
+            kind: ClipKind::Image,
+            text: String::new(),
+            copied_at: now_ms(),
+            image: Some(info),
+        });
     }
 
     /// Adds a newly copied text to the top. If the same text is already in the
@@ -65,27 +119,23 @@ impl History {
             return false;
         }
         self.clips.retain(|c| c.text != text);
-        let id = self.clips.iter().map(|c| c.id).max().unwrap_or(0).max(now_ms()) + 1;
-        self.clips.insert(
-            0,
-            Clip {
-                id,
-                text,
-                copied_at: now_ms(),
-            },
-        );
-        self.clips.truncate(MAX_HISTORY);
+        self.insert_top(Clip {
+            id: self.next_id(),
+            kind: ClipKind::Text,
+            text,
+            copied_at: now_ms(),
+            image: None,
+        });
         true
     }
 
-    /// Moves an existing clip to the top and returns its text.
-    pub fn promote(&mut self, id: u64) -> Option<String> {
+    /// Moves an existing clip to the top and returns a copy of it.
+    pub fn promote(&mut self, id: u64) -> Option<Clip> {
         let idx = self.clips.iter().position(|c| c.id == id)?;
         let mut clip = self.clips.remove(idx);
         clip.copied_at = now_ms();
-        let text = clip.text.clone();
-        self.clips.insert(0, clip);
-        Some(text)
+        self.clips.insert(0, clip.clone());
+        Some(clip)
     }
 
     pub fn remove(&mut self, id: u64) {
@@ -177,12 +227,27 @@ mod tests {
     }
 
     #[test]
+    fn images_dedupe_by_hash_and_old_history_still_loads() {
+        let mut h = history();
+        h.push("text".into());
+        let id = h.next_id();
+        h.push_image(id, ImageInfo { width: 2, height: 2, hash: 42 });
+        assert_eq!(h.find_image(42), Some(id));
+        assert_eq!(h.find_image(7), None);
+        assert_eq!(h.clips[0].kind, ClipKind::Image);
+
+        let old = r#"{"clips":[{"id":1,"text":"hi","copiedAt":5}]}"#;
+        let loaded: History = serde_json::from_str(old).unwrap();
+        assert_eq!(loaded.clips[0].kind, ClipKind::Text);
+    }
+
+    #[test]
     fn promote_moves_clip_to_top() {
         let mut h = history();
         h.push("a".into());
         h.push("b".into());
         let id = h.clips[1].id;
-        assert_eq!(h.promote(id).as_deref(), Some("a"));
+        assert_eq!(h.promote(id).map(|c| c.text).as_deref(), Some("a"));
         assert_eq!(h.clips[0].text, "a");
     }
 }
