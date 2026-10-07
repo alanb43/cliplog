@@ -7,7 +7,7 @@
 </head>
 <body class="settings">
   <h1>Cliplog</h1>
-  <p class="lead">Cliplog runs quietly in your menu bar / system tray and remembers the last 100 things you copy.
+  <p class="lead">Cliplog runs quietly in your menu bar / system tray and remembers what you copy: text, images, files and more.
     Press your shortcut anywhere to bring them back.</p>
 
   <form id="form">
@@ -17,15 +17,28 @@
       <small id="shortcut-hint">Click, then press the keys you want to use.</small>
     </label>
 
-    <label class="field">
-      <span>Clips shown when Cliplog opens</span>
-      <input id="quick" type="number" min="1" max="100" required />
-    </label>
+    <div class="pair">
+      <label class="field">
+        <span>Clips shown at first</span>
+        <input id="quick" type="number" min="1" max="1000" required />
+      </label>
+      <label class="field">
+        <span>After “Show more”</span>
+        <input id="expanded" type="number" min="1" max="1000" required />
+      </label>
+    </div>
 
-    <label class="field">
-      <span>Clips shown after “Show more”</span>
-      <input id="expanded" type="number" min="1" max="100" required />
-    </label>
+    <div class="pair">
+      <label class="field">
+        <span>Clips to keep</span>
+        <input id="keep" type="number" min="1" max="1000" required />
+      </label>
+      <label class="field">
+        <span>Max storage (MB)</span>
+        <input id="storage" type="number" min="10" max="100000" required />
+      </label>
+    </div>
+    <small id="usage" class="usage"></small>
 
     <label class="check">
       <input id="login" type="checkbox" />

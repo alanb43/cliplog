@@ -4,6 +4,9 @@ const hint = document.getElementById("shortcut-hint");
 const quick = document.getElementById("quick");
 const expanded = document.getElementById("expanded");
 const login = document.getElementById("login");
+const keep = document.getElementById("keep");
+const storage = document.getElementById("storage");
+const usage = document.getElementById("usage");
 const statusEl = document.getElementById("status");
 const clearBtn = document.getElementById("clear");
 
@@ -23,6 +26,12 @@ async function load() {
   quick.value = s.quickCount;
   expanded.value = s.expandedCount;
   login.checked = s.launchAtLogin;
+  keep.value = s.historySize;
+  storage.value = s.maxStorageMb;
+  const u = await invoke("get_storage_usage");
+  const mb = u.bytes / 1024 / 1024;
+  usage.textContent = `Currently storing ${u.clips} clip${u.clips === 1 ? "" : "s"} using ${mb < 0.1 ? "under 0.1" : mb.toFixed(1)} MB. ` +
+    "Oldest clips are removed first when either limit is reached.";
 }
 
 function stopRecording() {
@@ -72,6 +81,8 @@ form.addEventListener("submit", async (e) => {
         quickCount: Number(quick.value),
         expandedCount: Number(expanded.value),
         launchAtLogin: login.checked,
+        historySize: Number(keep.value),
+        maxStorageMb: Number(storage.value),
       },
     });
     await load();

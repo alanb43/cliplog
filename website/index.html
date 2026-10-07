@@ -88,6 +88,8 @@
     code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 5px; padding: 2px 6px; word-break: break-all; }
     .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     .two ol { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+    .note { color: var(--muted); font-size: 15px; margin: 20px 0 0; max-width: 70ch; }
+    .note strong { color: var(--fg); }
     footer { padding: 32px 0 48px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
 
     @media (max-width: 760px) {
@@ -107,7 +109,7 @@
     <div class="hero">
       <div>
         <h1>Never lose something you copied.</h1>
-        <p class="sub">Cliplog keeps your last 100 copies. Press a shortcut, click a clip, paste. Free, open source and only a few MB.</p>
+        <p class="sub">Cliplog keeps your last 100 copies: text, images, files and more. Press a shortcut, click a clip, paste. Free, open source and only a few MB.</p>
         <div class="buttons">
           <a class="btn primary" id="dl-mac" href="https://github.com/alanb43/cliplog/releases/latest">
             <strong>Download for Mac</strong><small>macOS 10.15+ · Apple silicon &amp; Intel</small>
@@ -147,6 +149,19 @@
 
   <section>
     <div class="wrap">
+      <h2>What Cliplog remembers</h2>
+      <div class="steps">
+        <div class="card"><h3>Text</h3><p>Plain or formatted. Bold, links and tables stay intact when you paste somewhere that supports them.</p></div>
+        <div class="card"><h3>Images &amp; screenshots</h3><p>Shown as thumbnails. Click one and paste the full image anywhere.</p></div>
+        <div class="card"><h3>Files &amp; app content</h3><p>Files from Finder or Explorer, plus app-specific content like Figma layers or Excel cells. It pastes back just like the original.</p></div>
+      </div>
+      <p class="note"><strong>About copied files:</strong> copying a file copies its <em>location</em>, not the file itself. If you later move, rename or delete the file, pasting that clip won’t find it.</p>
+      <p class="note">You choose how many clips to keep and how much disk space Cliplog may use. The oldest clips are removed first. Passwords copied from password managers are never saved.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
       <h2>Opening Cliplog for the first time</h2>
       <p style="color:var(--muted);margin-top:-12px">Cliplog is a free open source project, so it isn’t signed with a paid Apple or Microsoft certificate yet. Your computer will ask you to confirm the installation.</p>
       <div class="two">
@@ -173,7 +188,7 @@
   <section>
     <div class="wrap">
       <h2>Private by design</h2>
-      <p style="color:var(--muted);max-width:60ch">Your clipboard history stays on your computer, in a small file in your user folder. Cliplog has no accounts, analytics or network access. The <a id="src-link" href="https://github.com/alanb43/cliplog">source code</a> is open, so anyone can check.</p>
+      <p style="color:var(--muted);max-width:60ch">Your clipboard history stays on your computer, in your user folder. Cliplog has no accounts, analytics or network access. The <a id="src-link" href="https://github.com/alanb43/cliplog">source code</a> is open, so anyone can check.</p>
     </div>
   </section>
 

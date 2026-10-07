@@ -1,28 +1,20 @@
-//! Image clips are stored as PNG files next to the history, plus a small
-//! thumbnail for the overlay: `images/<id>.png` and `images/<id>.thumb.png`.
+//! Thumbnails for image clips (`images/<id>.thumb.png`). The image itself is
+//! stored with the clip's raw clipboard data. Cliplog 0.1 stored a full PNG at
+//! `images/<id>.png`; those are still read for old clips.
 
 use base64::Engine;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{imageops, ExtendedColorType, ImageEncoder, RgbaImage};
-use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
-use std::hash::{Hash, Hasher};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-/// Images bigger than this (raw RGBA) are not stored. ~8K x 4K.
+/// Thumbnails aren't made for images bigger than this (raw RGBA, ~8K x 4K).
 pub const MAX_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 const THUMB_W: u32 = 400;
 const THUMB_H: u32 = 160;
 
-pub fn hash(width: u32, height: u32, rgba: &[u8]) -> u64 {
-    let mut h = DefaultHasher::new();
-    (width, height).hash(&mut h);
-    rgba.hash(&mut h);
-    h.finish()
-}
-
-fn full_path(dir: &Path, id: u64) -> PathBuf {
+pub fn legacy_path(dir: &Path, id: u64) -> PathBuf {
     dir.join(format!("{id}.png"))
 }
 
@@ -37,9 +29,8 @@ fn write_png(path: &Path, img: &RgbaImage) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn save(dir: &Path, id: u64, width: u32, height: u32, rgba: Vec<u8>) -> Result<(), String> {
+pub fn save_thumbnail(dir: &Path, id: u64, width: u32, height: u32, rgba: Vec<u8>) -> Result<(), String> {
     let img = RgbaImage::from_raw(width, height, rgba).ok_or("invalid image data")?;
-    write_png(&full_path(dir, id), &img)?;
     let thumb = if width > THUMB_W || height > THUMB_H {
         let scale = (THUMB_W as f64 / width as f64).min(THUMB_H as f64 / height as f64);
         let (w, h) = ((width as f64 * scale).max(1.0), (height as f64 * scale).max(1.0));
@@ -50,9 +41,9 @@ pub fn save(dir: &Path, id: u64, width: u32, height: u32, rgba: Vec<u8>) -> Resu
     write_png(&thumb_path(dir, id), &thumb)
 }
 
-/// Returns (width, height, RGBA bytes).
-pub fn load(dir: &Path, id: u64) -> Result<(u32, u32, Vec<u8>), String> {
-    let img = image::open(full_path(dir, id)).map_err(|e| e.to_string())?.into_rgba8();
+/// Loads a full image saved by Cliplog 0.1. Returns (width, height, RGBA bytes).
+pub fn load_legacy(dir: &Path, id: u64) -> Result<(u32, u32, Vec<u8>), String> {
+    let img = image::open(legacy_path(dir, id)).map_err(|e| e.to_string())?.into_rgba8();
     Ok((img.width(), img.height(), img.into_raw()))
 }
 
@@ -62,7 +53,7 @@ pub fn thumbnail_data_url(dir: &Path, id: u64) -> Option<String> {
     Some(format!("data:image/png;base64,{b64}"))
 }
 
-/// Deletes image files whose clip is no longer in the history.
+/// Deletes files (named `<id>.<ext>`) whose clip is no longer in the history.
 pub fn prune(dir: &Path, keep: impl Fn(u64) -> bool) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for entry in entries.flatten() {

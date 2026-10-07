@@ -1,11 +1,14 @@
+mod clipboard;
 mod images;
 mod store;
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use store::{Clip, ClipKind, History, ImageInfo, Settings};
+use clipboard::Snapshot;
+use store::{Clip, ClipKind, History, ImageInfo, Settings, INLINE_LIMIT};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
@@ -16,8 +19,8 @@ struct AppState {
     data_dir: PathBuf,
     history: Mutex<History>,
     settings: Mutex<Settings>,
-    /// Last clipboard text we've seen, so the watcher only records changes
-    /// (and doesn't re-record text Cliplog itself put on the clipboard).
+    /// Last clipboard text we've seen, on platforms without raw clipboard
+    /// access, so the watcher only records changes.
     last_text: Mutex<Option<String>>,
     /// Clipboard change number right after Cliplog itself wrote to it, so the
     /// watcher can skip it.
@@ -27,6 +30,7 @@ struct AppState {
 const OVERLAY: &str = "overlay";
 const SETTINGS: &str = "settings";
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+const SETTLE_DELAY: Duration = Duration::from_millis(150);
 
 // ---------- windows ----------
 
@@ -102,32 +106,11 @@ fn show_settings(app: &AppHandle) {
 
 // ---------- clipboard watcher ----------
 
-/// Cheap "has the clipboard changed?" check so we don't open the clipboard
-/// on every poll (opening it can briefly block other apps on Windows).
-#[cfg(target_os = "windows")]
-fn clipboard_sequence() -> Option<u32> {
-    #[link(name = "user32")]
-    extern "system" {
-        fn GetClipboardSequenceNumber() -> u32;
-    }
-    Some(unsafe { GetClipboardSequenceNumber() })
-}
-
-#[cfg(target_os = "macos")]
-fn clipboard_sequence() -> Option<u32> {
-    #[allow(unused_unsafe)]
-    let count = unsafe { objc2_app_kit::NSPasteboard::generalPasteboard().changeCount() };
-    Some(count as u32)
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn clipboard_sequence() -> Option<u32> {
-    None
-}
-
 fn start_clipboard_watcher(app: AppHandle) {
     std::thread::spawn(move || {
-        let mut clipboard = loop {
+        // arboard is used for decoding images (thumbnails) and as a text-only
+        // fallback on platforms without raw clipboard access.
+        let mut fallback = loop {
             match arboard::Clipboard::new() {
                 Ok(c) => break c,
                 Err(_) => std::thread::sleep(Duration::from_secs(2)),
@@ -136,27 +119,41 @@ fn start_clipboard_watcher(app: AppHandle) {
         let mut last_seq = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
-            let seq = clipboard_sequence();
+            // Cheap "has the clipboard changed?" check, so the clipboard is
+            // only read after a copy.
+            let seq = clipboard::change_count();
             if seq.is_some() && seq == last_seq {
                 continue;
+            }
+            if seq.is_some() {
+                // Apps clear the clipboard and then write to it; the change
+                // counter only moves on the clear. Give the writer a moment so
+                // we don't read a half-written clipboard.
+                std::thread::sleep(SETTLE_DELAY);
+                if clipboard::change_count() != seq {
+                    continue; // changed again; handle it on the next poll
+                }
             }
             last_seq = seq;
             let state = app.state::<AppState>();
             if seq.is_some() && seq == *state.ignore_seq.lock().unwrap() {
-                continue;
+                continue; // Cliplog itself just wrote this.
             }
 
-            let changed = if let Ok(text) = clipboard.get_text() {
-                record_text(&state, text)
-            } else if seq.is_some() {
-                // Images are only checked when we know the clipboard changed;
-                // reading one is too expensive to do on every poll.
-                match clipboard.get_image() {
-                    Ok(img) => record_image(&state, img),
-                    Err(_) => false,
+            let changed = if clipboard::SUPPORTED {
+                match clipboard::read() {
+                    Ok(Some(snapshot)) => record_snapshot(&state, &mut fallback, snapshot),
+                    Ok(None) => false, // empty, or marked as secret
+                    Err(e) => {
+                        eprintln!("could not read clipboard: {e}");
+                        false
+                    }
                 }
             } else {
-                false
+                match fallback.get_text() {
+                    Ok(text) => record_text(&state, text),
+                    Err(_) => false,
+                }
             };
             if changed {
                 let _ = app.emit("history-changed", ());
@@ -174,43 +171,75 @@ fn record_text(state: &AppState, text: String) -> bool {
         *last = Some(text.clone());
     }
     let mut history = state.history.lock().unwrap();
-    let changed = history.push(text);
+    let changed = history.push_text(text);
     if changed {
         history.save();
     }
     changed
 }
 
-fn record_image(state: &AppState, img: arboard::ImageData) -> bool {
-    *state.last_text.lock().unwrap() = None;
-    if img.bytes.len() > images::MAX_IMAGE_BYTES {
+fn record_snapshot(state: &AppState, decoder: &mut arboard::Clipboard, mut snapshot: Snapshot) -> bool {
+    let (id, max_bytes, images_dir, blob_path) = {
+        let history = state.history.lock().unwrap();
+        let id = history.next_id();
+        (id, history.max_bytes(), history.images_dir(), history.blob_path(id))
+    };
+    // Something bigger than the whole storage cap: keep just its text, if any.
+    if snapshot.total_bytes() as u64 > max_bytes {
+        snapshot.retain_text();
+        if snapshot.items.is_empty() {
+            return false;
+        }
+    }
+
+    let files = snapshot.files();
+    let text = snapshot.text().unwrap_or_default();
+    let (kind, preview) = if !files.is_empty() {
+        (ClipKind::Files, files.join("\n"))
+    } else if !text.trim().is_empty() {
+        (ClipKind::Text, text)
+    } else if snapshot.has_image() {
+        (ClipKind::Image, String::new())
+    } else {
+        (ClipKind::Other, String::new())
+    };
+    let hash = snapshot.hash();
+    if state.history.lock().unwrap().is_same_as_newest(kind, &preview, hash) {
         return false;
     }
-    let (width, height) = (img.width as u32, img.height as u32);
-    let hash = images::hash(width, height, &img.bytes);
 
-    let id = {
-        let mut history = state.history.lock().unwrap();
-        if let Some(id) = history.find_image(hash) {
-            // Already have it: just move it to the top.
-            if history.clips.first().map(|c| c.id) == Some(id) {
+    let mut clip = Clip::new(id, kind, preview);
+    clip.hash = hash;
+    if kind == ClipKind::Image {
+        if let Ok(img) = decoder.get_image() {
+            let (width, height) = (img.width as u32, img.height as u32);
+            if img.bytes.len() <= images::MAX_IMAGE_BYTES
+                && images::save_thumbnail(&images_dir, id, width, height, img.bytes.into_owned()).is_ok()
+            {
+                clip.image = Some(ImageInfo { width, height });
+            }
+        }
+    }
+
+    // Plain text needs nothing but the text. Small clips keep their raw data
+    // in history.json; big ones (screenshots etc.) get their own file.
+    if !(kind == ClipKind::Text && snapshot.is_plain_text_only()) {
+        let size = snapshot.total_bytes();
+        clip.size = size as u64;
+        if size <= INLINE_LIMIT {
+            clip.data = Some(snapshot);
+        } else {
+            let tmp = blob_path.with_extension("clip.tmp");
+            if let Err(e) = fs::write(&tmp, snapshot.encode()).and_then(|_| fs::rename(&tmp, &blob_path)) {
+                eprintln!("could not save clip: {e}");
                 return false;
             }
-            history.promote(id);
-            history.save();
-            return true;
+            clip.on_disk = true;
         }
-        history.next_id()
-    };
-
-    // Encode outside the lock so the overlay stays responsive.
-    let dir = state.history.lock().unwrap().images_dir.clone();
-    if let Err(e) = images::save(&dir, id, width, height, img.bytes.into_owned()) {
-        eprintln!("could not save image: {e}");
-        return false;
     }
+
     let mut history = state.history.lock().unwrap();
-    history.push_image(id, ImageInfo { width, height, hash });
+    history.insert(clip);
     history.save();
     true
 }
@@ -237,35 +266,49 @@ fn apply_autostart(app: &AppHandle, enabled: bool) {
 
 #[tauri::command]
 fn get_history(state: tauri::State<AppState>) -> Vec<Clip> {
-    state.history.lock().unwrap().clips.clone()
+    state.history.lock().unwrap().clips.iter().map(Clip::summary).collect()
 }
 
 #[tauri::command]
 fn copy_clip(app: AppHandle, state: tauri::State<AppState>, id: u64) -> Result<(), String> {
-    let (clip, images_dir) = {
+    let (clip, blob_path, images_dir) = {
         let mut history = state.history.lock().unwrap();
         let clip = history.promote(id).ok_or("Clip not found")?;
         history.save();
-        (clip, history.images_dir.clone())
+        (clip, history.blob_path(id), history.images_dir())
     };
-    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    match clip.kind {
-        ClipKind::Text => {
-            *state.last_text.lock().unwrap() = Some(clip.text.clone());
-            clipboard.set_text(clip.text).map_err(|e| e.to_string())?;
-        }
-        ClipKind::Image => {
-            let (width, height, bytes) = images::load(&images_dir, id)?;
-            clipboard
-                .set_image(arboard::ImageData {
-                    width: width as usize,
-                    height: height as usize,
-                    bytes: bytes.into(),
-                })
-                .map_err(|e| e.to_string())?;
+    let snapshot = match (&clip.data, clip.on_disk) {
+        (Some(data), _) => Some(data.clone()),
+        (None, true) => Some(
+            fs::read(&blob_path)
+                .ok()
+                .and_then(|b| Snapshot::decode(&b))
+                .ok_or("This clip's saved data is missing")?,
+        ),
+        (None, false) => None,
+    };
+
+    match snapshot {
+        Some(snapshot) if clipboard::SUPPORTED => clipboard::write(&snapshot)?,
+        _ => {
+            let mut fallback = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+            if clip.kind == ClipKind::Image {
+                // Image saved by Cliplog 0.1.
+                let (width, height, bytes) = images::load_legacy(&images_dir, id)?;
+                fallback
+                    .set_image(arboard::ImageData {
+                        width: width as usize,
+                        height: height as usize,
+                        bytes: bytes.into(),
+                    })
+                    .map_err(|e| e.to_string())?;
+            } else {
+                *state.last_text.lock().unwrap() = Some(clip.text.clone());
+                fallback.set_text(clip.text).map_err(|e| e.to_string())?;
+            }
         }
     }
-    *state.ignore_seq.lock().unwrap() = clipboard_sequence();
+    *state.ignore_seq.lock().unwrap() = clipboard::change_count();
     let _ = app.emit("history-changed", ());
     dismiss_overlay(&app);
     Ok(())
@@ -273,8 +316,21 @@ fn copy_clip(app: AppHandle, state: tauri::State<AppState>, id: u64) -> Result<(
 
 #[tauri::command]
 fn get_thumbnail(state: tauri::State<AppState>, id: u64) -> Option<String> {
-    let dir = state.history.lock().unwrap().images_dir.clone();
+    let dir = state.history.lock().unwrap().images_dir();
     images::thumbnail_data_url(&dir, id)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageUsage {
+    clips: usize,
+    bytes: u64,
+}
+
+#[tauri::command]
+fn get_storage_usage(state: tauri::State<AppState>) -> StorageUsage {
+    let history = state.history.lock().unwrap();
+    StorageUsage { clips: history.clips.len(), bytes: history.total_bytes() }
 }
 
 #[tauri::command]
@@ -321,6 +377,12 @@ fn save_settings(
     }
     apply_autostart(&app, settings.launch_at_login);
     settings.save(&state.data_dir);
+    {
+        let mut history = state.history.lock().unwrap();
+        history.set_limits(&settings);
+        history.save();
+    }
+    let _ = app.emit("history-changed", ());
     *state.settings.lock().unwrap() = settings.clone();
     let _ = app.emit("settings-changed", settings.clone());
     Ok(settings)
@@ -363,6 +425,7 @@ pub fn run() {
             get_history,
             copy_clip,
             get_thumbnail,
+            get_storage_usage,
             delete_clip,
             clear_history,
             hide_overlay,
@@ -379,7 +442,7 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let (settings, first_run) = Settings::load(&data_dir);
-            let history = History::load(&data_dir);
+            let history = History::load(&data_dir, &settings);
             let handle = app.handle().clone();
 
             if first_run {

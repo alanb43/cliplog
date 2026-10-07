@@ -10,8 +10,28 @@ let selected = 0;
 let visible = [];
 const thumbs = new Map(); // clip id -> data URL
 
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const baseName = (path) => path.split(/[\\/]/).pop() || path;
+
+// Text used for the row, tooltip and search.
 function label(clip) {
-  return clip.kind === "image" ? `Image ${clip.image.width}×${clip.image.height}` : clip.text;
+  switch (clip.kind) {
+    case "image":
+      return clip.image ? `Image ${clip.image.width}×${clip.image.height}` : "Image";
+    case "files": {
+      const files = clip.text.split("\n");
+      return files.length === 1 ? baseName(files[0]) : `${files.length} files: ${files.map(baseName).join(", ")}`;
+    }
+    case "other":
+      return `Content from an app (${formatBytes(clip.size)})`;
+    default:
+      return clip.text;
+  }
 }
 
 function thumbnail(clip) {
@@ -46,7 +66,8 @@ function render() {
       const li = document.createElement("li");
       li.role = "option";
       if (i === selected) li.classList.add("selected");
-      li.title = clip.text.length > 2000 ? clip.text.slice(0, 2000) + "…" : label(clip);
+      const full = clip.kind === "files" ? clip.text : label(clip);
+      li.title = full.length > 2000 ? full.slice(0, 2000) + "…" : full;
 
       const num = document.createElement("span");
       num.className = "num";
@@ -54,13 +75,18 @@ function render() {
 
       const text = document.createElement("span");
       text.className = "text";
-      if (clip.kind === "image") {
+      if (clip.kind === "image" && clip.image) {
         li.classList.add("image");
         const size = document.createElement("small");
         size.textContent = `${clip.image.width}×${clip.image.height}`;
         text.append(thumbnail(clip), size);
-      } else {
+      } else if (clip.kind === "text") {
         text.textContent = clip.text.replace(/\s+/g, " ").trim().slice(0, 300);
+      } else {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = { files: clip.text.includes("\n") ? "Files" : "File", image: "Image", other: "App data" }[clip.kind];
+        text.append(tag, label(clip));
       }
 
       const when = document.createElement("span");
