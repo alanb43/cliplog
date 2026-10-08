@@ -146,7 +146,7 @@ fn start_clipboard_watcher(app: AppHandle) {
             let changed = if clipboard::SUPPORTED {
                 match clipboard::read() {
                     Ok(Some(snapshot)) => record_snapshot(&state, &mut fallback, snapshot),
-                    Ok(None) => false, // empty, or marked as secret
+                    Ok(None) => false, // empty
                     Err(e) => {
                         eprintln!("could not read clipboard: {e}");
                         false
