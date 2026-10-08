@@ -110,7 +110,7 @@ website/           Download page, published to GitHub Pages
 
 The **Release** workflow builds a universal macOS `.dmg` and a Windows `-setup.exe` and attaches them to a GitHub release. The website's download buttons always point at the newest release.
 
-The builds aren't code-signed, so macOS Gatekeeper and Windows SmartScreen ask users to confirm the first time they open the app. The website explains how. Signing requires an Apple Developer account ($99/year) and a Windows code-signing certificate.
+macOS builds are signed with a Developer ID certificate and notarized by Apple (both the app and the `.dmg`), so they open without Gatekeeper warnings. This needs these repository secrets: `APPLE_CERTIFICATE` (base64 `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific password) and `APPLE_TEAM_ID`. Windows builds aren't signed yet, so SmartScreen asks users to confirm the first time they run the installer.
 
 ## License
 

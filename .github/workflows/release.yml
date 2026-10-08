@@ -80,3 +80,19 @@ jobs:
           releaseBody: Download the `.dmg` for Mac or the `-setup.exe` for Windows. See https://alanb43.github.io/cliplog for install help.
           releaseDraft: false
           args: ${{ matrix.args }}
+
+      # Tauri notarizes the .app; also notarize the .dmg people download (Apple
+      # recommends notarizing the outermost container) and replace the asset.
+      - name: Notarize and re-upload the DMG
+        if: matrix.platform == 'macos-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+          TAG="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          gh release upload "$TAG" "$DMG" --clobber
