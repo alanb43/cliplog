@@ -38,9 +38,42 @@ jobs:
 
       - run: npm ci
 
+      # macOS: load the Developer ID certificate into a temporary keychain so
+      # the app can be signed, then notarized by Apple. Needs these repository
+      # secrets (Settings -> Secrets and variables -> Actions):
+      #   APPLE_CERTIFICATE           base64 of the exported .p12
+      #   APPLE_CERTIFICATE_PASSWORD  password chosen when exporting the .p12
+      #   APPLE_ID                    Apple Account email
+      #   APPLE_PASSWORD              app-specific password (account.apple.com)
+      #   APPLE_TEAM_ID               10-character Team ID
+      - name: Import Apple Developer certificate
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+          CERT_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$CERT_ID" ]; then echo "::error::No Developer ID Application certificate found in APPLE_CERTIFICATE"; exit 1; fi
+          echo "CERT_ID=$CERT_ID" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ env.CERT_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: Cliplog __VERSION__
